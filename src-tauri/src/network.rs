@@ -111,15 +111,72 @@ pub async fn network_fetch(
 
 #[tauri::command]
 pub async fn network_get_system_proxy_url() -> Result<HashMap<String, String>, ()> {
-  let proxies = reqwest::get_system_proxy_map();
-  let mut mapped_proxies: HashMap<String, String> = HashMap::with_capacity(proxies.len());
-
-  for (key, value) in proxies {
-    mapped_proxies.insert(key.clone(), match value {
-      reqwest::ProxyScheme::Http { host, .. } => host.to_string(),
-      reqwest::ProxyScheme::Https { host, .. } => host.to_string(),
-    });
+  let mut proxies = HashMap::new();
+  for (scheme, vars) in [
+    ("http", ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]),
+    ("https", ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]),
+  ] {
+    if let Some(proxy) = vars
+      .iter()
+      .filter_map(|key| std::env::var(key).ok())
+      .find_map(|value| proxy_address(&value))
+    {
+      proxies.insert(scheme.to_owned(), proxy);
+    }
   }
+  if proxies.is_empty() {
+    proxies = windows_proxies();
+  }
+  Ok(proxies)
+}
 
-  Ok(mapped_proxies)
+#[cfg(windows)]
+fn windows_proxies() -> HashMap<String, String> {
+  use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+
+  let current_user = RegKey::predef(HKEY_CURRENT_USER);
+  let Ok(settings) = current_user
+    .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+  else {
+    return HashMap::new();
+  };
+  if settings.get_value::<u32, _>("ProxyEnable").ok() != Some(1) {
+    return HashMap::new();
+  }
+  let Ok(server) = settings.get_value::<String, _>("ProxyServer") else {
+    return HashMap::new();
+  };
+  if server.contains('=') {
+    return server
+      .split(';')
+      .filter_map(|entry| entry.split_once('='))
+      .filter_map(|(scheme, value)| {
+        Some((scheme.trim().to_owned(), proxy_address(value)?))
+      })
+      .collect();
+  }
+  ["http", "https"]
+    .into_iter()
+    .filter_map(|scheme| Some((scheme.to_owned(), proxy_address(&server)?)))
+    .collect()
+}
+
+#[cfg(not(windows))]
+fn windows_proxies() -> HashMap<String, String> {
+  HashMap::new()
+}
+
+fn proxy_address(value: &str) -> Option<String> {
+  let value = value.trim();
+  let url = if value.contains("://") {
+    reqwest::Url::parse(value).ok()?
+  } else {
+    reqwest::Url::parse(&format!("http://{value}")).ok()?
+  };
+  if !matches!(url.scheme(), "http" | "https") {
+    return None;
+  }
+  let host = url.host_str()?;
+  let port = url.port_or_known_default()?;
+  Some(format!("{host}:{port}"))
 }

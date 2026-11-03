@@ -1,4 +1,5 @@
 /* eslint-disable react/prop-types */
+import { getMediaPreviewUrl } from '../../twitter/utils';
 import { LoadingOutlined } from '@ant-design/icons';
 import { App } from 'antd';
 import dayjs from 'dayjs';
@@ -132,7 +133,7 @@ export const PostListGridView: React.FC = () => {
               <div className="h-full">
                 <img
                   alt="推文图片"
-                  src={`${media.url}?format=jpg&name=small`}
+                  src={getMediaPreviewUrl(media, 'small')}
                   loading="lazy"
                   className="object-cover w-full h-full transform transition-transform group-hover:scale-105"
                 />

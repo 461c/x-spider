@@ -18,6 +18,49 @@ import MediaType from '../enums/MediaType';
 
 const HOST = 'x.com';
 
+// X web GraphQL operations and flags, aligned with the current twscrape client.
+const timelineFeatures = {
+  articles_preview_enabled: true,
+  c9s_tweet_anatomy_moderator_badge_enabled: true,
+  communities_web_enable_tweet_community_results_fetch: true,
+  creator_subscriptions_quote_tweet_preview_enabled: false,
+  creator_subscriptions_tweet_preview_api_enabled: true,
+  freedom_of_speech_not_reach_fetch_enabled: true,
+  graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+  longform_notetweets_consumption_enabled: true,
+  longform_notetweets_inline_media_enabled: true,
+  longform_notetweets_rich_text_read_enabled: true,
+  responsive_web_edit_tweet_api_enabled: true,
+  responsive_web_enhance_cards_enabled: false,
+  responsive_web_graphql_exclude_directive_enabled: true,
+  responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+  responsive_web_grok_community_note_auto_translation_is_enabled: false,
+  responsive_web_graphql_timeline_navigation_enabled: true,
+  responsive_web_grok_imagine_annotation_enabled: false,
+  responsive_web_media_download_video_enabled: false,
+  responsive_web_profile_redirect_enabled: true,
+  responsive_web_twitter_article_tweet_consumption_enabled: true,
+  rweb_tipjar_consumption_enabled: true,
+  rweb_video_timestamps_enabled: true,
+  standardized_nudges_misinfo: true,
+  tweet_awards_web_tipping_enabled: false,
+  tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
+  tweet_with_visibility_results_prefer_gql_media_interstitial_enabled: false,
+  tweetypie_unmention_optimization_enabled: true,
+  verified_phone_label_enabled: false,
+  view_counts_everywhere_api_enabled: true,
+  responsive_web_grok_analyze_button_fetch_trends_enabled: false,
+  premium_content_api_read_enabled: false,
+  profile_label_improvements_pcf_label_in_post_enabled: false,
+  responsive_web_grok_share_attachment_enabled: false,
+  responsive_web_grok_analyze_post_followups_enabled: false,
+  responsive_web_grok_image_annotation_enabled: false,
+  responsive_web_grok_analysis_button_from_backend: false,
+  responsive_web_jetfuel_frame: false,
+  rweb_video_screen_enabled: true,
+  responsive_web_grok_show_grok_translated_post: true,
+};
+
 function getCommonHeaders(withCredentials = true): Record<string, string> {
   const cookies = useAppStateStore.getState().cookieString;
   return {
@@ -29,6 +72,8 @@ function getCommonHeaders(withCredentials = true): Record<string, string> {
             'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
           Cookie: cookies,
           'X-Csrf-Token': parseCookie(cookies)['ct0'],
+          'X-Twitter-Auth-Type': 'OAuth2Session',
+          'X-Twitter-Active-User': 'yes',
         }
       : {}),
   };
@@ -70,10 +115,12 @@ export async function getUser(screenName: string): Promise<TwitterUser> {
   const resp = await request({
     method: 'GET',
     responseType: 'json',
-    url: `https://${HOST}/i/api/graphql/NimuplG1OB7Fd2btCLdBOw/UserByScreenName`,
+    url: `https://${HOST}/i/api/graphql/AMIBMjtxEEATh4z8V9GtRg/UserByScreenName`,
     query: {
       features: JSON.stringify({
+        ...timelineFeatures,
         hidden_profile_likes_enabled: true,
+        subscriptions_feature_can_gift_premium: false,
         hidden_profile_subscriptions_enabled: true,
         responsive_web_graphql_exclude_directive_enabled: true,
         verified_phone_label_enabled: false,
@@ -96,21 +143,21 @@ export async function getUser(screenName: string): Promise<TwitterUser> {
   });
   ensureResponse(resp);
 
-  const data = R.path(['data', 'user', 'result', 'legacy'])(resp.body) as any;
-
-  if (!data) {
+  const user = R.path<any>(['data', 'user', 'result'], resp.body);
+  if (!user?.rest_id || !(user.core?.screen_name || user.legacy?.screen_name)) {
     throw new Error('找不到该用户');
   }
+  return mapTwitterUser(user);
+}
 
+function mapTwitterUser(user: any): TwitterUser {
   return {
-    avatar: data?.profile_image_url_https,
-    name: data?.name,
-    screenName: data?.screen_name,
-    id: R.path<string>(['data', 'user', 'result', 'rest_id'])(
-      resp.body,
-    ) as string,
-    mediaCount: data?.media_count,
-    registerTime: dayjs(data.created_at),
+    id: user?.rest_id,
+    avatar: user?.avatar?.image_url || user?.legacy?.profile_image_url_https,
+    name: user?.core?.name ?? user?.legacy?.name,
+    screenName: user?.core?.screen_name ?? user?.legacy?.screen_name,
+    mediaCount: user?.tweet_counts?.media_tweets ?? user?.legacy?.media_count,
+    registerTime: dayjs(user?.core?.created_at ?? user?.legacy?.created_at),
   };
 }
 
@@ -137,10 +184,10 @@ const mapTwitterPosts = (posts: any[]) => {
         duration: v?.video_info?.duration_millis,
         variants: v?.video_info?.variants?.map?.((item: any) => ({
           bitrate: item?.bitrate,
-          contentType: item?.contentType,
+          contentType: item?.content_type ?? item?.contentType,
           url: item?.url,
         })),
-        aspectRatio: v?.aspect_ratio,
+        aspectRatio: v?.video_info?.aspect_ratio,
       },
     });
 
@@ -166,8 +213,17 @@ const mapTwitterPosts = (posts: any[]) => {
     )(medias);
   };
   return R.map<any, TwitterPost>((item) => {
+    const mediaGroups = [
+      item.extended_entities?.media,
+      item.legacy?.extended_entities?.media,
+      item.entities?.media,
+      item.legacy?.entities?.media,
+    ];
+    const medias = mediaGroups.find(
+      (media) => Array.isArray(media) && media.length,
+    );
     return {
-      id: item?.rest_id,
+      id: item.rest_id,
       views: R.isNotNil(item?.views?.count)
         ? Number(item.views.count)
         : undefined,
@@ -184,34 +240,78 @@ const mapTwitterPosts = (posts: any[]) => {
       replyCount: item?.legacy?.reply_count,
       retweeted: item?.legacy?.retweeted,
       retweetCount: item?.legacy?.retweet_count,
-      medias: item?.legacy?.entities?.media
-        ? mapTwitterMedias(item.legacy?.entities?.media)
-        : undefined,
+      medias: medias ? mapTwitterMedias(medias) : undefined,
       tags: R.pipe<any, any[], string[]>(
         R.path<any>(['legacy', 'entities', 'hashtags']),
         R.ifElse(R.isNotNil, R.map(R.prop('text')), R.always([])),
       )(item),
-      user: {
-        id: item?.core?.user_results?.result?.rest_id,
-        avatar:
-          item?.core?.user_results?.result?.legacy?.profile_image_url_https,
-        mediaCount: item?.core?.user_results?.result?.legacy?.media_count,
-        name: item?.core?.user_results?.result?.legacy?.name,
-        screenName: item?.core?.user_results?.result?.legacy?.screen_name,
-        registerTime: item?.core?.user_results?.result?.legacy?.created_at,
-      },
+      user: mapTwitterUser(item.core?.user_results?.result),
     };
   })(posts);
 };
 
-const pathToInstructions = R.path<any>([
-  'data',
-  'user',
-  'result',
-  'timeline_v2',
-  'timeline',
-  'instructions',
-]);
+function parseTimeline(
+  body: unknown,
+  previousCursor?: string,
+  skipRetweets = false,
+) {
+  const user = R.path<any>(['data', 'user', 'result'], body);
+  const instructions =
+    user?.timeline?.timeline?.instructions ??
+    user?.timeline_v2?.timeline?.instructions;
+
+  if (!Array.isArray(instructions)) {
+    const message = R.path<string>(['errors', 0, 'message'], body);
+    throw new Error(message || 'X 返回的响应缺少时间线');
+  }
+
+  const tweets = new Map<string, any>();
+  let cursor: string | null = null;
+
+  function addItem(item: any) {
+    if (item?.cursorType === 'Bottom' && typeof item.value === 'string') {
+      cursor = item.value;
+    }
+
+    const result = item?.tweet_results?.result;
+    const tweet =
+      result?.__typename === 'TweetWithVisibilityResults'
+        ? result.tweet
+        : result;
+    if (!tweet?.rest_id || (tweet.__typename && tweet.__typename !== 'Tweet'))
+      return;
+    if (
+      skipRetweets &&
+      (tweet.retweeted_status_result || tweet.legacy?.retweeted_status_result)
+    )
+      return;
+    tweets.set(tweet.rest_id, tweet);
+  }
+
+  function addEntry(entry: any) {
+    const content = entry?.content;
+    addItem(content?.itemContent ?? content);
+    for (const moduleItem of content?.items ?? []) {
+      addItem(moduleItem?.item?.itemContent);
+    }
+  }
+
+  for (const instruction of instructions) {
+    for (const entry of instruction.entries ?? []) addEntry(entry);
+    if (instruction.type === 'TimelineReplaceEntry')
+      addEntry(instruction.entry);
+    for (const item of instruction.moduleItems ?? []) {
+      addItem(item?.item?.itemContent);
+    }
+  }
+
+  return {
+    twitterPosts: mapTwitterPosts([...tweets.values()]).filter(
+      (post) => post.medias?.length,
+    ),
+    cursor: cursor === previousCursor ? null : cursor,
+  };
+}
 
 export async function getUserMedias(
   userId: string,
@@ -223,34 +323,11 @@ export async function getUserMedias(
 }> {
   const resp = await request({
     method: 'GET',
-    url: `https://${HOST}/i/api/graphql/cEjpJXA15Ok78yO4TUQPeQ/UserMedia`,
+    url: `https://${HOST}/i/api/graphql/FjGqmSbAmWrp4U33SysuuQ/UserMedia`,
     responseType: 'json',
     query: {
-      features: JSON.stringify({
-        responsive_web_graphql_exclude_directive_enabled: true,
-        verified_phone_label_enabled: false,
-        creator_subscriptions_tweet_preview_api_enabled: true,
-        responsive_web_graphql_timeline_navigation_enabled: true,
-        responsive_web_graphql_skip_user_profile_image_extensions_enabled:
-          false,
-        c9s_tweet_anatomy_moderator_badge_enabled: true,
-        tweetypie_unmention_optimization_enabled: true,
-        responsive_web_edit_tweet_api_enabled: true,
-        graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
-        view_counts_everywhere_api_enabled: true,
-        longform_notetweets_consumption_enabled: true,
-        responsive_web_twitter_article_tweet_consumption_enabled: true,
-        tweet_awards_web_tipping_enabled: false,
-        freedom_of_speech_not_reach_fetch_enabled: true,
-        standardized_nudges_misinfo: true,
-        tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled:
-          true,
-        rweb_video_timestamps_enabled: true,
-        longform_notetweets_rich_text_read_enabled: true,
-        longform_notetweets_inline_media_enabled: true,
-        responsive_web_media_download_video_enabled: false,
-        responsive_web_enhance_cards_enabled: false,
-      }),
+      features: JSON.stringify(timelineFeatures),
+      fieldToggles: JSON.stringify({ withArticlePlainText: false }),
       variables: JSON.stringify({
         userId,
         count,
@@ -266,83 +343,7 @@ export async function getUserMedias(
   });
   ensureResponse(resp);
 
-  const extractTwitterPosts = (
-    pathToInstructions: (data: any) => any,
-    data: any,
-  ): TwitterPost[] | undefined => {
-    const pathToTwitterPostItems = (instructions: any): any => {
-      const pathToModuleItemsFirst = R.pipe(
-        R.find(R.pathEq('TimelineAddEntries', ['type'])),
-        R.defaultTo({}),
-        R.prop('entries'),
-        R.defaultTo([]),
-        R.find(R.pathEq('TimelineTimelineModule', ['content', 'entryType'])),
-        R.defaultTo({}),
-        R.path<any>(['content', 'items']),
-      );
-
-      const pathToModuleItemsMore = R.pipe(
-        R.find(R.pathEq('TimelineAddToModule', ['type'])),
-        R.defaultTo({}),
-        R.prop('moduleItems'),
-      );
-
-      return R.pipe(
-        R.either(pathToModuleItemsFirst, pathToModuleItemsMore),
-        R.defaultTo([]),
-        R.map(
-          R.pipe(
-            R.path(['item', 'itemContent', 'tweet_results', 'result']),
-            R.ifElse<any, any, any>(
-              R.propEq('TweetWithVisibilityResults', '__typename'),
-              R.prop('tweet'),
-              R.identity,
-            ),
-          ),
-        ),
-      )(instructions);
-    };
-    return R.pipe(
-      pathToInstructions,
-      R.ifElse(
-        R.isNil,
-        R.always([]),
-        R.pipe(pathToTwitterPostItems, R.filter(R.isNotNil), mapTwitterPosts),
-      ),
-    )(data);
-  };
-
-  const extractNextCursor = (
-    pathToInstructions: (data: any) => any,
-    data: any,
-  ): string | null => {
-    return R.pipe<any, any, any, any, any, string | undefined, string | null>(
-      pathToInstructions,
-      R.find(R.pathEq('TimelineAddEntries', ['type'])),
-      R.prop('entries'),
-      R.find(R.pathEq('Bottom', ['content', 'cursorType'])),
-      R.path(['content', 'value']),
-      R.defaultTo(null),
-    )(data);
-  };
-
-  const twitterPosts = extractTwitterPosts(pathToInstructions, resp.body);
-
-  if (!twitterPosts || twitterPosts.length === 0) {
-    return {
-      cursor: null,
-      twitterPosts: [],
-    };
-  }
-
-  log.info('twitterPosts', twitterPosts);
-
-  const nextCursor = extractNextCursor(pathToInstructions, resp.body);
-
-  return {
-    twitterPosts,
-    cursor: nextCursor,
-  };
+  return parseTimeline(resp.body, cursor);
 }
 
 export async function getUserTweets(
@@ -355,39 +356,10 @@ export async function getUserTweets(
 }> {
   const resp = await request({
     method: 'GET',
-    url: `https://${HOST}/i/api/graphql/9zyyd1hebl7oNWIPdA8HRw/UserTweets`,
+    url: `https://${HOST}/i/api/graphql/OdBLACRZ0-9NikpJotaT7g/UserTweets`,
     responseType: 'json',
     query: {
-      features: JSON.stringify({
-        rweb_tipjar_consumption_enabled: true,
-        responsive_web_graphql_exclude_directive_enabled: true,
-        verified_phone_label_enabled: false,
-        creator_subscriptions_tweet_preview_api_enabled: true,
-        responsive_web_graphql_timeline_navigation_enabled: true,
-        responsive_web_graphql_skip_user_profile_image_extensions_enabled:
-          false,
-        communities_web_enable_tweet_community_results_fetch: true,
-        c9s_tweet_anatomy_moderator_badge_enabled: true,
-        articles_preview_enabled: false,
-        tweetypie_unmention_optimization_enabled: true,
-        responsive_web_edit_tweet_api_enabled: true,
-        graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
-        view_counts_everywhere_api_enabled: true,
-        longform_notetweets_consumption_enabled: true,
-        responsive_web_twitter_article_tweet_consumption_enabled: true,
-        tweet_awards_web_tipping_enabled: false,
-        creator_subscriptions_quote_tweet_preview_enabled: false,
-        freedom_of_speech_not_reach_fetch_enabled: true,
-        standardized_nudges_misinfo: true,
-        tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled:
-          true,
-        tweet_with_visibility_results_prefer_gql_media_interstitial_enabled:
-          false,
-        rweb_video_timestamps_enabled: true,
-        longform_notetweets_rich_text_read_enabled: true,
-        longform_notetweets_inline_media_enabled: true,
-        responsive_web_enhance_cards_enabled: false,
-      }),
+      features: JSON.stringify(timelineFeatures),
       variables: JSON.stringify({
         userId,
         count,
@@ -402,88 +374,5 @@ export async function getUserTweets(
   });
   ensureResponse(resp);
 
-  const extractTwitterPosts = (
-    pathToInstructions: (data: any) => any,
-    data: any,
-  ): TwitterPost[] | undefined => {
-    const pathToTwitterPostItems = (instructions: any): any => {
-      // @ts-ignore
-      return R.pipe(
-        R.find(R.pathEq('TimelineAddEntries', ['type'])),
-        R.defaultTo({}),
-        R.prop('entries'),
-        R.defaultTo([]),
-        R.map(
-          R.cond([
-            [
-              R.pathSatisfies(R.startsWith('tweet'), ['entryId']),
-              R.path(['content', 'itemContent', 'tweet_results', 'result']),
-            ],
-            [
-              R.pathSatisfies(R.startsWith('profile-conversation'), [
-                'entryId',
-              ]),
-              R.pipe(
-                R.path<any>(['content', 'items']),
-                R.map(
-                  R.path(['item', 'itemContent', 'tweet_results', 'result']),
-                ),
-              ),
-            ],
-            [R.T, R.always(undefined)],
-          ]),
-        ),
-        R.flatten,
-        R.filter(
-          R.allPass<any>([
-            R.isNotNil,
-            // 过滤掉转推
-            R.complement(R.hasPath(['legacy', 'retweeted_status_result'])),
-            // 过滤掉无媒体
-            R.hasPath(['legacy', 'entities', 'media']),
-            R.pathSatisfies(R.pipe(R.length, R.lte(0)), [
-              'legacy',
-              'entities',
-              'media',
-            ]),
-          ]),
-        ),
-      )(instructions);
-    };
-    return R.pipe(
-      pathToInstructions,
-      pathToTwitterPostItems,
-      mapTwitterPosts,
-    )(data);
-  };
-
-  const extractNextCursor = (
-    pathToInstructions: (data: any) => any,
-    data: any,
-  ): string | null => {
-    return R.pipe<any, any, any, any, any, string | undefined, string | null>(
-      pathToInstructions,
-      R.find(R.pathEq('TimelineAddEntries', ['type'])),
-      R.prop('entries'),
-      R.find(R.pathEq('Bottom', ['content', 'cursorType'])),
-      R.path(['content', 'value']),
-      R.defaultTo(null),
-    )(data);
-  };
-
-  const twitterPosts = extractTwitterPosts(pathToInstructions, resp.body);
-  const nextCursor = extractNextCursor(pathToInstructions, resp.body);
-  if (!twitterPosts || twitterPosts.length === 0) {
-    return {
-      cursor: nextCursor,
-      twitterPosts: [],
-    };
-  }
-
-  log.info('twitterPosts', twitterPosts);
-
-  return {
-    twitterPosts,
-    cursor: nextCursor,
-  };
+  return parseTimeline(resp.body, cursor, true);
 }

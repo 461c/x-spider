@@ -1,6 +1,21 @@
 import MediaType from '../enums/MediaType';
 import { TwitterMedia } from '../interfaces/TwitterMedia';
 
+export function getMediaPreviewUrl(
+  media: TwitterMedia,
+  size: 'small' | 'thumb',
+) {
+  if (!media.url) return undefined;
+  try {
+    const url = new URL(media.url);
+    if (url.hostname !== 'pbs.twimg.com') return media.url;
+    url.searchParams.set('name', size);
+    return url.href;
+  } catch {
+    return media.url;
+  }
+}
+
 export function getDownloadUrl(media: TwitterMedia): string {
   if (media.type === MediaType.Photo) {
     if (!media.url) throw new Error('媒体没有下载链接');

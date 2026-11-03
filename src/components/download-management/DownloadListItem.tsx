@@ -1,4 +1,5 @@
 /* eslint-disable react/prop-types */
+import { getMediaPreviewUrl } from '../../twitter/utils';
 import {
   CaretRightFilled,
   DeleteFilled,
@@ -149,7 +150,7 @@ export const DownloadListItem: React.FC<DownloadListItemProps> = ({
         title="打开推文页"
       >
         <img
-          src={`${t.media.url}?format=jpg&name=thumb`}
+          src={getMediaPreviewUrl(t.media, 'thumb')}
           loading="lazy"
           className="w-full h-full object-cover transition-transform transform hover:scale-105"
         />

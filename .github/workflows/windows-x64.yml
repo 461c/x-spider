@@ -1,0 +1,91 @@
+name: Build Windows x64 EXE
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-x64
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/master'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Set up Rust target
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build NSIS installer
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+      - name: Stage installer
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)"
+          }
+          New-Item -ItemType Directory -Path windows-x64 | Out-Null
+          Copy-Item -LiteralPath $installers[0].FullName -Destination windows-x64/X-Spider-windows-x64-setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: windows-x64/X-Spider-windows-x64-setup.exe
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: ${{ runner.temp }}/windows-x64
+      - name: Publish installer to windows-x64 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch=windows-x64
+          installer=X-Spider-windows-x64-setup.exe
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # Skip obsolete builds, including manual reruns of older commits.
+          master_ref=$(git ls-remote --exit-code origin refs/heads/master)
+          if [[ "${master_ref%%$'\t'*}" != "$GITHUB_SHA" ]]; then
+            echo 'master advanced while this build was running.'
+            exit 0
+          fi
+
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch"; then
+            git fetch --no-tags origin "refs/heads/$branch"
+            git switch -c "$branch" FETCH_HEAD
+          else
+            status=$?
+            if [[ "$status" != 2 ]]; then
+              exit "$status"
+            fi
+            git switch --orphan "$branch"
+          fi
+
+          cp "$RUNNER_TEMP/windows-x64/$installer" "$installer"
+          git add -- "$installer"
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Build Windows x64 installer from $GITHUB_SHA"
+          git push origin "HEAD:refs/heads/$branch"

@@ -57,6 +57,8 @@ jobs:
           path: ${{ runner.temp }}/windows-x64
       - name: Publish installer to windows-x64 branch
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           branch=windows-x64
@@ -71,8 +73,10 @@ jobs:
             exit 0
           fi
 
+          existing_blob=''
           if git ls-remote --exit-code --heads origin "refs/heads/$branch"; then
             git fetch --no-tags origin "refs/heads/$branch"
+            existing_blob=$(git rev-parse --verify "FETCH_HEAD:$installer" 2>/dev/null || true)
             git switch -c "$branch" FETCH_HEAD
           else
             status=$?
@@ -88,4 +92,32 @@ jobs:
             exit 0
           fi
           git commit -m "Build Windows x64 installer from $GITHUB_SHA"
-          git push origin "HEAD:refs/heads/$branch"
+          if ! git push origin "HEAD:refs/heads/$branch"; then
+            master_ref=$(git ls-remote --exit-code origin refs/heads/master)
+            if [[ "${master_ref%%$'\t'*}" != "$GITHUB_SHA" ]]; then
+              echo 'master advanced while publishing.'
+              exit 0
+            fi
+            export branch installer existing_blob
+            payload="$RUNNER_TEMP/installer-payload.json"
+            python3 - "$payload" <<'PYCODE'
+          import base64
+          import json
+          import os
+          import sys
+
+          with open(os.environ["installer"], "rb") as source:
+              content = base64.b64encode(source.read()).decode("ascii")
+          data = {
+              "message": f"Build Windows x64 installer from {os.environ['GITHUB_SHA']}",
+              "content": content,
+              "branch": os.environ["branch"],
+          }
+          if os.environ["existing_blob"]:
+              data["sha"] = os.environ["existing_blob"]
+          with open(sys.argv[1], "w", encoding="utf-8") as output:
+              json.dump(data, output)
+          PYCODE
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$installer" --input "$payload" --silent
+            rm -f "$payload"
+          fi

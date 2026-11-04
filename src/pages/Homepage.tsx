@@ -17,6 +17,7 @@ export const Homepage: React.FC = () => {
     clearUser,
     loadUser,
     clearPostList: clearMediaList,
+    filter,
   } = useHomepageStore();
   const { searchHistory, addSearchHistory, clearSearchHistory, cookieString } =
     useAppStateStore((s) => ({
@@ -44,7 +45,7 @@ export const Homepage: React.FC = () => {
       addSearchHistory(sn);
     } catch (err: any) {
       log.error(err);
-      message.error('加载失败，请检查用户 ID 是否正确');
+      message.error(`加载用户失败：${err?.message || '未知原因'}`);
     }
   };
 
@@ -172,7 +173,7 @@ export const Homepage: React.FC = () => {
           className="relative grow mt-4 pb-4 overflow-hidden h-full min-h-[50vh]"
           aria-label="内容预览"
         >
-          <PostListGridView />
+          <PostListGridView key={userInfo.data.id + ':' + filter.source} />
         </section>
       )}
     </div>

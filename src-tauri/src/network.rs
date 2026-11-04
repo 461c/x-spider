@@ -93,7 +93,14 @@ pub async fn network_fetch(
   // Load response body
   let body: Value = {
     match response_type.as_str() {
-      "json" => response.json().await.map_err(map_reqwest_err).map(|res| Value::Object(res)),
+      "json" => {
+        let text = response.text().await.map_err(map_reqwest_err)?;
+        if status >= 400 {
+          Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+        } else {
+          serde_json::from_str(&text).map_err(|err| err.to_string())
+        }
+      },
       "text" => response.text().await.map_err(map_reqwest_err).map(|res| Value::String(res)),
       "binary" => {
         let bytes = response.bytes().await.map_err(map_reqwest_err)?;

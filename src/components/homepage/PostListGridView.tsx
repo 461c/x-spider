@@ -4,15 +4,52 @@ import { LoadingOutlined } from '@ant-design/icons';
 import { App } from 'antd';
 import dayjs from 'dayjs';
 import * as R from 'ramda';
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import MediaType from '../../enums/MediaType';
 import { TwitterMedia } from '../../interfaces/TwitterMedia';
 import { TwitterPost } from '../../interfaces/TwitterPost';
+import { request } from '../../ipc/network';
 import { useDownloadStore } from '../../stores/download';
 import { useHomepageStore } from '../../stores/homepage';
 import { buildPostUrl } from '../../twitter/url';
 import { InfiniteScroll } from '../InfiniteScroll';
 import { GridViewItemAction, GridViewItemActions } from './GridViewItemActions';
+
+const MediaPreview: React.FC<{ media: TwitterMedia }> = ({ media }) => {
+  const url = getMediaPreviewUrl(media, 'small');
+  const [loadThroughProxy, setLoadThroughProxy] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState<string>();
+
+  useEffect(() => {
+    if (!loadThroughProxy || !url) return;
+    let active = true;
+    let objectUrl: string | undefined;
+    request({ method: 'GET', url, responseType: 'binary' })
+      .then((response) => {
+        if (!active || response.status >= 400) return;
+        const type = response.headers['content-type']?.[0] || 'image/jpeg';
+        objectUrl = URL.createObjectURL(
+          new Blob([new Uint8Array(response.body)], { type }),
+        );
+        setProxyUrl(objectUrl);
+      })
+      .catch((err) => log.warn('加载媒体预览失败', err));
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [loadThroughProxy, url]);
+
+  return (
+    <img
+      alt="推文图片"
+      src={proxyUrl || url}
+      onError={() => setLoadThroughProxy(true)}
+      loading="lazy"
+      className="object-cover w-full h-full transform transition-transform group-hover:scale-105"
+    />
+  );
+};
 
 export const PostListGridView: React.FC = () => {
   const { message } = App.useApp();
@@ -131,12 +168,7 @@ export const PostListGridView: React.FC = () => {
               className="relative h-[12rem] overflow-hidden bg-white group"
             >
               <div className="h-full">
-                <img
-                  alt="推文图片"
-                  src={getMediaPreviewUrl(media, 'small')}
-                  loading="lazy"
-                  className="object-cover w-full h-full transform transition-transform group-hover:scale-105"
-                />
+                <MediaPreview media={media} />
                 {media.type === MediaType.Video && (
                   <span className="block absolute right-2 bottom-2 text-white bg-[rgba(0,0,0,0.6)] rounded-sm px-[0.3rem] text-sm">
                     <span className="sr-only">视频时长：</span>

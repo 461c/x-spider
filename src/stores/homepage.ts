@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { TwitterUser } from '../interfaces/TwitterUser';
-import { getUser, getUserMedias } from '../twitter/api';
+import { getUser, getUserMedias, getUserTweets } from '../twitter/api';
 import { TwitterPost } from '../interfaces/TwitterPost';
 import { DownloadFilter } from '../interfaces/DownloadFilter';
 import MediaType from '../enums/MediaType';
@@ -43,7 +43,17 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
     mediaTypes: [MediaType.Photo, MediaType.Video, MediaType.Gif],
     source: 'medias',
   },
-  setFilter: (filter) => set({ filter }),
+  setFilter: (filter) => {
+    if (filter.source !== get().filter.source) {
+      loadPostListAbortController.abort();
+      set({
+        filter,
+        postList: { list: undefined, loading: false, cursor: null },
+      });
+    } else {
+      set({ filter });
+    }
+  },
 
   userInfo: {
     loading: false,
@@ -59,11 +69,12 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
 
     loadUserAbortController.abort();
     loadUserAbortController = new AbortController();
+    const controller = loadUserAbortController;
 
     try {
       const value = await getUser(screenName);
 
-      if (loadUserAbortController.signal.aborted) {
+      if (controller.signal.aborted) {
         return;
       }
 
@@ -74,6 +85,7 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
         },
       });
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       set({
         userInfo: {
           data: undefined,
@@ -83,13 +95,15 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
       throw err;
     }
   },
-  clearUser: () =>
+  clearUser: () => {
+    loadUserAbortController.abort();
     set({
       userInfo: {
         loading: false,
         data: undefined,
       },
-    }),
+    });
+  },
 
   postList: {
     list: undefined,
@@ -98,6 +112,7 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
   },
   postListGenerator: undefined,
   clearPostList: () => {
+    loadPostListAbortController.abort();
     set({
       postList: {
         cursor: null,
@@ -109,6 +124,7 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
   loadPostList: async () => {
     loadPostListAbortController.abort();
     loadPostListAbortController = new AbortController();
+    const controller = loadPostListAbortController;
     const state = get();
     const userInfo = state.userInfo.data;
 
@@ -125,9 +141,11 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
     });
 
     try {
-      const { cursor, twitterPosts } = await getUserMedias(userInfo.id);
+      const getPosts =
+        state.filter.source === 'tweets' ? getUserTweets : getUserMedias;
+      const { cursor, twitterPosts } = await getPosts(userInfo.id);
 
-      if (loadPostListAbortController.signal.aborted) {
+      if (controller.signal.aborted) {
         return;
       }
 
@@ -139,6 +157,7 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
         },
       });
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       log.error('Failed to load post list', err);
       set({
         postList: {
@@ -176,14 +195,17 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
 
     loadPostListAbortController.abort();
     loadPostListAbortController = new AbortController();
+    const controller = loadPostListAbortController;
 
     try {
-      const { twitterPosts, cursor } = await getUserMedias(
+      const getPosts =
+        state.filter.source === 'tweets' ? getUserTweets : getUserMedias;
+      const { twitterPosts, cursor } = await getPosts(
         userInfo.id,
         postList.cursor,
       );
 
-      if (loadPostListAbortController.signal.aborted) {
+      if (controller.signal.aborted) {
         return;
       }
 
@@ -195,8 +217,9 @@ export const useHomepageStore = create<HomepageStore>((set, get) => ({
         },
       });
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       set(
-        produce(state, (draft) => {
+        produce(get(), (draft) => {
           draft.postList.loading = false;
         }),
       );

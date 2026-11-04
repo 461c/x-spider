@@ -99,7 +99,7 @@ export const DownloadController: React.FC = () => {
         </Form.Item>
         <Form.Item
           name="source"
-          label="下载源"
+          label="预览和下载源"
           tooltip="帖子能下载到更早的推文，但爬取速度较慢；媒体可能下载不到更早的推文，但爬取速度更快。"
         >
           <Radio.Group
